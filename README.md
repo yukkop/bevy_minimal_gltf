@@ -1,6 +1,6 @@
 # bevy_minimal_gltf
 
-This repository contains `bevy_minimal_gltf`, a simplified version of `bevy_gltf` version 0.12.0. The primary modification in this version is the removal of all material and shader components, focusing solely on mesh loading. This makes it an ideal choice for projects that require only the mesh loading capabilities of the original `bevy_gltf` without the overhead of additional rendering features.
+This repository contains `bevy_minimal_gltf`, a simplified version of `bevy_gltf` version 0.12.0. The primary modification in this version is the removal of all material and shader components, focusing solely on mesh loading. This makes it an ideal choice for projects that require only the mesh loading capabilities of the original `bevy_gltf` without the rendering features.
 
 ## Features
 
