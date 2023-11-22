@@ -1,15 +1,11 @@
 [package]
-name = "bevy_gltf"
+name = "bevy_minimal_gltf"
 version = "0.12.0"
 edition = "2021"
-description = "Bevy Engine GLTF loading"
-homepage = "https://bevyengine.org"
-repository = "https://github.com/bevyengine/bevy"
+description = "Bevy Engine minimal GLTF loading"
+repository = "https://github.com/yukkop/bevy_minimal_gltf"
 license = "MIT OR Apache-2.0"
 keywords = ["bevy"]
-
-[features]
-pbr_transmission_textures = []
 
 [dependencies]
 # bevy

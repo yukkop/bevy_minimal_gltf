@@ -31,7 +31,7 @@ pub struct MinimalGltfPlugin {
     custom_vertex_attributes: HashMap<String, MeshVertexAttribute>,
 }
 
-impl GltfPlugin {
+impl MinimalGltfPlugin {
     /// Register a custom vertex attribute so that it is recognized when loading a glTF file with the [`GltfLoader`].
     ///
     /// `name` must be the attribute name as found in the glTF data, which must start with an underscore.
@@ -48,7 +48,7 @@ impl GltfPlugin {
     }
 }
 
-impl Plugin for GltfPlugin {
+impl Plugin for MinimalGltfPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<GltfExtras>()
             .init_asset::<Gltf>()
