@@ -449,12 +449,7 @@ async fn load_gltf<'a, 'b, 'c>(
             let mesh = load_context.add_labeled_asset(primitive_label, mesh);
             primitives.push(super::GltfPrimitive {
                 mesh,
-                material: primitive
-                    .material()
-                    .index()
-                    .and_then(|i| materials.get(i).cloned()),
                 extras: get_gltf_extras(primitive.extras()),
-                material_extras: get_gltf_extras(primitive.material().extras()),
             });
         }
 
@@ -624,8 +619,6 @@ async fn load_gltf<'a, 'b, 'c>(
         named_scenes,
         meshes,
         named_meshes,
-        materials,
-        named_materials,
         nodes,
         named_nodes,
         #[cfg(feature = "bevy_animation")]

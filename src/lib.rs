@@ -16,7 +16,6 @@ pub use loader::*;
 use bevy_app::prelude::*;
 use bevy_asset::{Asset, AssetApp, Handle};
 use bevy_ecs::{prelude::Component, reflect::ReflectComponent};
-use bevy_pbr::StandardMaterial;
 use bevy_reflect::{Reflect, TypePath};
 use bevy_render::{
     mesh::{Mesh, MeshVertexAttribute},
@@ -82,10 +81,6 @@ pub struct Gltf {
     pub meshes: Vec<Handle<GltfMesh>>,
     /// Named meshes loaded from the glTF file.
     pub named_meshes: HashMap<String, Handle<GltfMesh>>,
-    /// All materials loaded from the glTF file.
-    pub materials: Vec<Handle<StandardMaterial>>,
-    /// Named materials loaded from the glTF file.
-    pub named_materials: HashMap<String, Handle<StandardMaterial>>,
     /// All nodes loaded from the glTF file.
     pub nodes: Vec<Handle<GltfNode>>,
     /// Named nodes loaded from the glTF file.
@@ -135,12 +130,8 @@ pub struct GltfMesh {
 pub struct GltfPrimitive {
     /// Topology to be rendered.
     pub mesh: Handle<Mesh>,
-    /// Material to apply to the `mesh`.
-    pub material: Option<Handle<StandardMaterial>>,
     /// Additional data.
     pub extras: Option<GltfExtras>,
-    /// Additional data of the `material`.
-    pub material_extras: Option<GltfExtras>,
 }
 
 /// Additional untyped data that can be present on most glTF types.
