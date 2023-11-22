@@ -10,7 +10,7 @@ use bevy_log::{error, warn};
 use bevy_math::{Mat4, Vec3};
 use bevy_pbr::{
     AlphaMode, DirectionalLight, DirectionalLightBundle, PbrBundle, PointLight, PointLightBundle,
-    SpotLight, SpotLightBundle, StandardMaterial, MAX_JOINTS,
+    SpotLight, SpotLightBundle, MAX_JOINTS,
 };
 use bevy_render::{
     camera::{Camera, OrthographicProjection, PerspectiveProjection, Projection, ScalingMode},
@@ -22,7 +22,7 @@ use bevy_render::{
     },
     prelude::SpatialBundle,
     primitives::Aabb,
-    render_resource::{Face, PrimitiveTopology},
+    render_resource::PrimitiveTopology,
     texture::{
         CompressedImageFormats, Image, ImageAddressMode, ImageFilterMode, ImageLoaderSettings,
         ImageSampler, ImageSamplerDescriptor, ImageType, TextureError,
@@ -269,68 +269,6 @@ async fn load_gltf<'a, 'b, 'c>(
             }
         };
         handles.push(handle);
-    }
-
-    // We collect handles to ensure loaded images from paths are not unloaded before they are used elsewhere
-    // in the loader. This prevents "reloads", but it also prevents dropping the is_srgb context on reload.
-    //
-    // In theory we could store a mapping between texture.index() and handle to use
-    // later in the loader when looking up handles for materials. However this would mean
-    // that the material's load context would no longer track those images as dependencies.
-    let mut _texture_handles = Vec::new();
-    if gltf.textures().len() == 1 || cfg!(target_arch = "wasm32") {
-        for texture in gltf.textures() {
-            let parent_path = load_context.path().parent().unwrap();
-            let image = load_image(
-                texture,
-                &buffer_data,
-                &linear_textures,
-                parent_path,
-                loader.supported_compressed_formats,
-            )
-            .await?;
-            process_loaded_texture(load_context, &mut _texture_handles, image);
-        }
-    } else {
-        #[cfg(not(target_arch = "wasm32"))]
-        IoTaskPool::get()
-            .scope(|scope| {
-                gltf.textures().for_each(|gltf_texture| {
-                    let parent_path = load_context.path().parent().unwrap();
-                    let linear_textures = &linear_textures;
-                    let buffer_data = &buffer_data;
-                    scope.spawn(async move {
-                        load_image(
-                            gltf_texture,
-                            buffer_data,
-                            linear_textures,
-                            parent_path,
-                            loader.supported_compressed_formats,
-                        )
-                        .await
-                    });
-                });
-            })
-            .into_iter()
-            .for_each(|result| match result {
-                Ok(image) => {
-                    process_loaded_texture(load_context, &mut _texture_handles, image);
-                }
-                Err(err) => {
-                    warn!("Error loading glTF texture: {}", err);
-                }
-            });
-    }
-
-    let mut materials = vec![];
-    let mut named_materials = HashMap::default();
-    // NOTE: materials must be loaded after textures because image load() calls will happen before load_with_settings, preventing is_srgb from being set properly
-    for material in gltf.materials() {
-        let handle = load_material(&material, load_context, false);
-        if let Some(name) = material.name() {
-            named_materials.insert(name.to_string(), handle.clone());
-        }
-        materials.push(handle);
     }
 
     let mut meshes = vec![];
@@ -657,194 +595,6 @@ fn paths_recur(
     paths.insert(node.index(), (root_index, path));
 }
 
-/// Loads a glTF texture as a bevy [`Image`] and returns it together with its label.
-async fn load_image<'a, 'b>(
-    gltf_texture: gltf::Texture<'a>,
-    buffer_data: &[Vec<u8>],
-    linear_textures: &HashSet<usize>,
-    parent_path: &'b Path,
-    supported_compressed_formats: CompressedImageFormats,
-) -> Result<ImageOrPath, GltfError> {
-    let is_srgb = !linear_textures.contains(&gltf_texture.index());
-    let sampler_descriptor = texture_sampler(&gltf_texture);
-    match gltf_texture.source().source() {
-        gltf::image::Source::View { view, mime_type } => {
-            let start = view.offset();
-            let end = view.offset() + view.length();
-            let buffer = &buffer_data[view.buffer().index()][start..end];
-            let image = Image::from_buffer(
-                buffer,
-                ImageType::MimeType(mime_type),
-                supported_compressed_formats,
-                is_srgb,
-                ImageSampler::Descriptor(sampler_descriptor),
-            )?;
-            Ok(ImageOrPath::Image {
-                image,
-                label: texture_label(&gltf_texture),
-            })
-        }
-        gltf::image::Source::Uri { uri, mime_type } => {
-            let uri = percent_encoding::percent_decode_str(uri)
-                .decode_utf8()
-                .unwrap();
-            let uri = uri.as_ref();
-            if let Ok(data_uri) = DataUri::parse(uri) {
-                let bytes = data_uri.decode()?;
-                let image_type = ImageType::MimeType(data_uri.mime_type);
-                Ok(ImageOrPath::Image {
-                    image: Image::from_buffer(
-                        &bytes,
-                        mime_type.map(ImageType::MimeType).unwrap_or(image_type),
-                        supported_compressed_formats,
-                        is_srgb,
-                        ImageSampler::Descriptor(sampler_descriptor),
-                    )?,
-                    label: texture_label(&gltf_texture),
-                })
-            } else {
-                let image_path = parent_path.join(uri);
-                Ok(ImageOrPath::Path {
-                    path: image_path,
-                    is_srgb,
-                    sampler_descriptor,
-                })
-            }
-        }
-    }
-}
-
-/// Loads a glTF material as a bevy [`StandardMaterial`] and returns it.
-fn load_material(
-    material: &Material,
-    load_context: &mut LoadContext,
-    is_scale_inverted: bool,
-) -> Handle<StandardMaterial> {
-    let material_label = material_label(material, is_scale_inverted);
-    load_context.labeled_asset_scope(material_label, |load_context| {
-        let pbr = material.pbr_metallic_roughness();
-
-        // TODO: handle missing label handle errors here?
-        let color = pbr.base_color_factor();
-        let base_color_texture = pbr.base_color_texture().map(|info| {
-            // TODO: handle info.tex_coord() (the *set* index for the right texcoords)
-            texture_handle(load_context, &info.texture())
-        });
-
-        let normal_map_texture: Option<Handle<Image>> =
-            material.normal_texture().map(|normal_texture| {
-                // TODO: handle normal_texture.scale
-                // TODO: handle normal_texture.tex_coord() (the *set* index for the right texcoords)
-                texture_handle(load_context, &normal_texture.texture())
-            });
-
-        let metallic_roughness_texture = pbr.metallic_roughness_texture().map(|info| {
-            // TODO: handle info.tex_coord() (the *set* index for the right texcoords)
-            texture_handle(load_context, &info.texture())
-        });
-
-        let occlusion_texture = material.occlusion_texture().map(|occlusion_texture| {
-            // TODO: handle occlusion_texture.tex_coord() (the *set* index for the right texcoords)
-            // TODO: handle occlusion_texture.strength() (a scalar multiplier for occlusion strength)
-            texture_handle(load_context, &occlusion_texture.texture())
-        });
-
-        let emissive = material.emissive_factor();
-        let emissive_texture = material.emissive_texture().map(|info| {
-            // TODO: handle occlusion_texture.tex_coord() (the *set* index for the right texcoords)
-            // TODO: handle occlusion_texture.strength() (a scalar multiplier for occlusion strength)
-            texture_handle(load_context, &info.texture())
-        });
-
-        #[cfg(feature = "pbr_transmission_textures")]
-        let (specular_transmission, specular_transmission_texture) =
-            material.transmission().map_or((0.0, None), |transmission| {
-                let transmission_texture: Option<Handle<Image>> = transmission
-                    .transmission_texture()
-                    .map(|transmission_texture| {
-                        // TODO: handle transmission_texture.tex_coord() (the *set* index for the right texcoords)
-                        texture_handle(load_context, &transmission_texture.texture())
-                    });
-
-                (transmission.transmission_factor(), transmission_texture)
-            });
-
-        #[cfg(not(feature = "pbr_transmission_textures"))]
-        let specular_transmission = material
-            .transmission()
-            .map_or(0.0, |transmission| transmission.transmission_factor());
-
-        #[cfg(feature = "pbr_transmission_textures")]
-        let (thickness, thickness_texture, attenuation_distance, attenuation_color) = material
-            .volume()
-            .map_or((0.0, None, f32::INFINITY, [1.0, 1.0, 1.0]), |volume| {
-                let thickness_texture: Option<Handle<Image>> =
-                    volume.thickness_texture().map(|thickness_texture| {
-                        // TODO: handle thickness_texture.tex_coord() (the *set* index for the right texcoords)
-                        texture_handle(load_context, &thickness_texture.texture())
-                    });
-
-                (
-                    volume.thickness_factor(),
-                    thickness_texture,
-                    volume.attenuation_distance(),
-                    volume.attenuation_color(),
-                )
-            });
-
-        #[cfg(not(feature = "pbr_transmission_textures"))]
-        let (thickness, attenuation_distance, attenuation_color) =
-            material
-                .volume()
-                .map_or((0.0, f32::INFINITY, [1.0, 1.0, 1.0]), |volume| {
-                    (
-                        volume.thickness_factor(),
-                        volume.attenuation_distance(),
-                        volume.attenuation_color(),
-                    )
-                });
-
-        let ior = material.ior().unwrap_or(1.5);
-
-        StandardMaterial {
-            base_color: Color::rgba_linear(color[0], color[1], color[2], color[3]),
-            base_color_texture,
-            perceptual_roughness: pbr.roughness_factor(),
-            metallic: pbr.metallic_factor(),
-            metallic_roughness_texture,
-            normal_map_texture,
-            double_sided: material.double_sided(),
-            cull_mode: if material.double_sided() {
-                None
-            } else if is_scale_inverted {
-                Some(Face::Front)
-            } else {
-                Some(Face::Back)
-            },
-            occlusion_texture,
-            emissive: Color::rgb_linear(emissive[0], emissive[1], emissive[2])
-                * material.emissive_strength().unwrap_or(1.0),
-            emissive_texture,
-            specular_transmission,
-            #[cfg(feature = "pbr_transmission_textures")]
-            specular_transmission_texture,
-            thickness,
-            #[cfg(feature = "pbr_transmission_textures")]
-            thickness_texture,
-            ior,
-            attenuation_distance,
-            attenuation_color: Color::rgb_linear(
-                attenuation_color[0],
-                attenuation_color[1],
-                attenuation_color[2],
-            ),
-            unlit: material.unlit(),
-            alpha_mode: alpha_mode(material),
-            ..Default::default()
-        }
-    })
-}
-
 /// Loads a glTF node.
 fn load_node(
     gltf_node: &gltf::Node,
@@ -928,24 +678,12 @@ fn load_node(
         if let Some(mesh) = gltf_node.mesh() {
             // append primitives
             for primitive in mesh.primitives() {
-                let material = primitive.material();
-                let material_label = material_label(&material, is_scale_inverted);
-
-                // This will make sure we load the default material now since it would not have been
-                // added when iterating over all the gltf materials (since the default material is
-                // not explicitly listed in the gltf).
-                // It also ensures an inverted scale copy is instantiated if required.
-                if !load_context.has_labeled_asset(&material_label) {
-                    load_material(&material, load_context, is_scale_inverted);
-                }
-
                 let primitive_label = primitive_label(&mesh, &primitive);
                 let bounds = primitive.bounding_box();
 
                 let mut mesh_entity = parent.spawn(PbrBundle {
                     // TODO: handle missing label handle errors here?
                     mesh: load_context.get_label_handle(&primitive_label),
-                    material: load_context.get_label_handle(&material_label),
                     ..Default::default()
                 });
                 let target_count = primitive.morph_targets().len();
@@ -1120,46 +858,6 @@ fn morph_targets_label(mesh: &gltf::Mesh, primitive: &Primitive) -> String {
     )
 }
 
-/// Returns the label for the `material`.
-fn material_label(material: &gltf::Material, is_scale_inverted: bool) -> String {
-    if let Some(index) = material.index() {
-        format!(
-            "Material{index}{}",
-            if is_scale_inverted { " (inverted)" } else { "" }
-        )
-    } else {
-        "MaterialDefault".to_string()
-    }
-}
-
-/// Returns the label for the `texture`.
-fn texture_label(texture: &gltf::Texture) -> String {
-    format!("Texture{}", texture.index())
-}
-
-fn texture_handle(load_context: &mut LoadContext, texture: &gltf::Texture) -> Handle<Image> {
-    match texture.source().source() {
-        gltf::image::Source::View { .. } => {
-            let label = texture_label(texture);
-            load_context.get_label_handle(&label)
-        }
-        gltf::image::Source::Uri { uri, .. } => {
-            let uri = percent_encoding::percent_decode_str(uri)
-                .decode_utf8()
-                .unwrap();
-            let uri = uri.as_ref();
-            if let Ok(_data_uri) = DataUri::parse(uri) {
-                let label = texture_label(texture);
-                load_context.get_label_handle(&label)
-            } else {
-                let parent = load_context.path().parent().unwrap();
-                let image_path = parent.join(uri);
-                load_context.load(image_path)
-            }
-        }
-    }
-}
-
 /// Returns the label for the `node`.
 fn node_label(node: &gltf::Node) -> String {
     format!("Node{}", node.index())
@@ -1172,51 +870,6 @@ fn scene_label(scene: &gltf::Scene) -> String {
 
 fn skin_label(skin: &gltf::Skin) -> String {
     format!("Skin{}", skin.index())
-}
-
-/// Extracts the texture sampler data from the glTF texture.
-fn texture_sampler(texture: &gltf::Texture) -> ImageSamplerDescriptor {
-    let gltf_sampler = texture.sampler();
-
-    ImageSamplerDescriptor {
-        address_mode_u: texture_address_mode(&gltf_sampler.wrap_s()),
-        address_mode_v: texture_address_mode(&gltf_sampler.wrap_t()),
-
-        mag_filter: gltf_sampler
-            .mag_filter()
-            .map(|mf| match mf {
-                MagFilter::Nearest => ImageFilterMode::Nearest,
-                MagFilter::Linear => ImageFilterMode::Linear,
-            })
-            .unwrap_or(ImageSamplerDescriptor::default().mag_filter),
-
-        min_filter: gltf_sampler
-            .min_filter()
-            .map(|mf| match mf {
-                MinFilter::Nearest
-                | MinFilter::NearestMipmapNearest
-                | MinFilter::NearestMipmapLinear => ImageFilterMode::Nearest,
-                MinFilter::Linear
-                | MinFilter::LinearMipmapNearest
-                | MinFilter::LinearMipmapLinear => ImageFilterMode::Linear,
-            })
-            .unwrap_or(ImageSamplerDescriptor::default().min_filter),
-
-        mipmap_filter: gltf_sampler
-            .min_filter()
-            .map(|mf| match mf {
-                MinFilter::Nearest
-                | MinFilter::Linear
-                | MinFilter::NearestMipmapNearest
-                | MinFilter::LinearMipmapNearest => ImageFilterMode::Nearest,
-                MinFilter::NearestMipmapLinear | MinFilter::LinearMipmapLinear => {
-                    ImageFilterMode::Linear
-                }
-            })
-            .unwrap_or(ImageSamplerDescriptor::default().mipmap_filter),
-
-        ..Default::default()
-    }
 }
 
 /// Maps the texture address mode form glTF to wgpu.
