@@ -16,7 +16,6 @@ pub use loader::*;
 use bevy_app::prelude::*;
 use bevy_asset::{Asset, AssetApp, Handle};
 use bevy_ecs::{prelude::Component, reflect::ReflectComponent};
-use bevy_pbr::StandardMaterial;
 use bevy_reflect::{Reflect, TypePath};
 use bevy_render::{
     mesh::{Mesh, MeshVertexAttribute},

@@ -1,6 +1,6 @@
 use crate::{vertex_attributes::convert_attribute, Gltf, GltfExtras, GltfNode};
 use bevy_asset::{
-    io::Reader, AssetLoadError, AssetLoader, AsyncReadExt, Handle, LoadContext, ReadAssetBytesError,
+    io::Reader, AssetLoadError, AssetLoader, AsyncReadExt, LoadContext, ReadAssetBytesError,
 };
 use bevy_core::Name;
 use bevy_core_pipeline::prelude::Camera3dBundle;
@@ -9,7 +9,7 @@ use bevy_hierarchy::{BuildWorldChildren, WorldChildBuilder};
 use bevy_log::{error, warn};
 use bevy_math::{Mat4, Vec3};
 use bevy_pbr::{
-    AlphaMode, DirectionalLight, DirectionalLightBundle, PbrBundle, PointLight, PointLightBundle,
+    DirectionalLight, DirectionalLightBundle, PbrBundle, PointLight, PointLightBundle,
     SpotLight, SpotLightBundle, MAX_JOINTS,
 };
 use bevy_render::{
@@ -23,26 +23,21 @@ use bevy_render::{
     prelude::SpatialBundle,
     primitives::Aabb,
     render_resource::PrimitiveTopology,
-    texture::{
-        CompressedImageFormats, Image, ImageAddressMode, ImageFilterMode, ImageLoaderSettings,
-        ImageSampler, ImageSamplerDescriptor, ImageType, TextureError,
-    },
+    texture::{ CompressedImageFormats, TextureError },
 };
 use bevy_scene::Scene;
 #[cfg(not(target_arch = "wasm32"))]
-use bevy_tasks::IoTaskPool;
 use bevy_transform::components::Transform;
 use bevy_utils::{HashMap, HashSet};
 use gltf::{
     accessor::Iter,
     mesh::{util::ReadIndices, Mode},
-    texture::{MagFilter, MinFilter, WrappingMode},
-    Material, Node, Primitive, Semantic,
+    Node, Primitive, Semantic,
 };
 use serde::Deserialize;
 use std::{
     collections::VecDeque,
-    path::{Path, PathBuf},
+    path::Path,
 };
 use thiserror::Error;
 
@@ -244,32 +239,6 @@ async fn load_gltf<'a, 'b, 'c>(
         }
         (animations, named_animations, animation_roots)
     };
-
-    // TODO: use the threaded impl on wasm once wasm thread pool doesn't deadlock on it
-    // See https://github.com/bevyengine/bevy/issues/1924 for more details
-    // The taskpool use is also avoided when there is only one texture for performance reasons and
-    // to avoid https://github.com/bevyengine/bevy/pull/2725
-    // PERF: could this be a Vec instead? Are gltf texture indices dense?
-    fn process_loaded_texture(
-        load_context: &mut LoadContext,
-        handles: &mut Vec<Handle<Image>>,
-        texture: ImageOrPath,
-    ) {
-        let handle = match texture {
-            ImageOrPath::Image { label, image } => load_context.add_labeled_asset(label, image),
-            ImageOrPath::Path {
-                path,
-                is_srgb,
-                sampler_descriptor,
-            } => {
-                load_context.load_with_settings(path, move |settings: &mut ImageLoaderSettings| {
-                    settings.is_srgb = is_srgb;
-                    settings.sampler = ImageSampler::Descriptor(sampler_descriptor.clone());
-                })
-            }
-        };
-        handles.push(handle);
-    }
 
     let mut meshes = vec![];
     let mut named_meshes = HashMap::default();
@@ -615,7 +584,6 @@ fn load_node(
     // instead we equivalently test if the global scale is inverted by checking if the number
     // of negative scale factors is odd. if so we will assign a copy of the material with face
     // culling inverted, rather than modifying the mesh data directly.
-    let is_scale_inverted = world_transform.scale.is_negative_bitmask().count_ones() & 1 == 1;
     let mut node = world_builder.spawn(SpatialBundle::from(transform));
 
     node.insert(node_name(gltf_node));
@@ -872,15 +840,6 @@ fn skin_label(skin: &gltf::Skin) -> String {
     format!("Skin{}", skin.index())
 }
 
-/// Maps the texture address mode form glTF to wgpu.
-fn texture_address_mode(gltf_address_mode: &gltf::texture::WrappingMode) -> ImageAddressMode {
-    match gltf_address_mode {
-        WrappingMode::ClampToEdge => ImageAddressMode::ClampToEdge,
-        WrappingMode::Repeat => ImageAddressMode::Repeat,
-        WrappingMode::MirroredRepeat => ImageAddressMode::MirrorRepeat,
-    }
-}
-
 /// Maps the `primitive_topology` form glTF to `wgpu`.
 fn get_primitive_topology(mode: Mode) -> Result<PrimitiveTopology, GltfError> {
     match mode {
@@ -890,14 +849,6 @@ fn get_primitive_topology(mode: Mode) -> Result<PrimitiveTopology, GltfError> {
         Mode::Triangles => Ok(PrimitiveTopology::TriangleList),
         Mode::TriangleStrip => Ok(PrimitiveTopology::TriangleStrip),
         mode => Err(GltfError::UnsupportedPrimitive { mode }),
-    }
-}
-
-fn alpha_mode(material: &Material) -> AlphaMode {
-    match material.alpha_mode() {
-        gltf::material::AlphaMode::Opaque => AlphaMode::Opaque,
-        gltf::material::AlphaMode::Mask => AlphaMode::Mask(material.alpha_cutoff().unwrap_or(0.5)),
-        gltf::material::AlphaMode::Blend => AlphaMode::Blend,
     }
 }
 
@@ -995,18 +946,6 @@ fn resolve_node_hierarchy(
         .into_iter()
         .map(|(_, resolved)| resolved)
         .collect()
-}
-
-enum ImageOrPath {
-    Image {
-        image: Image,
-        label: String,
-    },
-    Path {
-        path: PathBuf,
-        is_srgb: bool,
-        sampler_descriptor: ImageSamplerDescriptor,
-    },
 }
 
 struct DataUri<'a> {
